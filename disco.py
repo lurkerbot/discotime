@@ -17,7 +17,7 @@
 
 # drag in the SDK from two dirs up
 import sys
-sys.path.append("../..")
+sys.path.append("./aws-iot-device-sdk-python")
 from AWSIoTPythonSDK.MQTTLib import AWSIoTMQTTShadowClient
 
 import os
@@ -39,11 +39,9 @@ class Device(object):
     
     def shadowDeleteCompleteHandler(self, payload, responseStatus, token):
         print("shadow delete completed: " + payload)
-
         # test if we can still push
         JSONPayload = '{"state":{"desired":{"property": 42}}}'
         self._deviceShadow.shadowUpdate(JSONPayload, lambda payload, responseStatus, token: self.shadowUpdateCompleteHandler(payload, responseStatus, token), 5)
-
 
     def connectDeviceShadow(self):
         host = "a30rsz8andmfjk.iot.ap-southeast-2.amazonaws.com"
