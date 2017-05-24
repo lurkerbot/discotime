@@ -1,6 +1,6 @@
 '''
 /*
- * Copyright 2010-2016 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2010-2017 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License").
  * You may not use this file except in compliance with the License.
@@ -17,7 +17,9 @@
 
 # drag in the SDK from two dirs up
 import sys
-sys.path.append("../..")
+import json
+
+sys.path.append("aws-iot-device-sdk-python")
 from AWSIoTPythonSDK.MQTTLib import AWSIoTMQTTShadowClient
 
 import os
@@ -31,19 +33,40 @@ class Device(object):
     def __init__(self):
         self._shadowName = "<<UNNAMEDDEVICE>>"
 
+    '''
+        push current class instance state as JSON to IoT shadow device
+    '''
+    def updateShadow(self):
+        self._deviceShadow.shadowUpdate(self.toShadowJSON(),
+                                        lambda payload, responseStatus, token: self.shadowUpdateCompleteHandler(payload, responseStatus, token),
+                                        5)
+
+    ''' 
+        subclasses implement this method to convert the current
+        instance state to JSON for use in an IoT device shadow update
+        call
+    '''
+    def toShadowJSON(self):
+        assert(False) # must implement
+        return ""
+
+    '''
+        sublcasses implement this method to apply IoT shadow update
+        delta JSON to the current instance state
+    '''
+    def applyShadowJSON(self, shadowJSON):
+        assert(False) # must implement
+
     def shadowDeltaChangeHandler(self, payload, responseStatus, token):
-        print("received delta: " + payload)
+        self.applyShadowJSON(payload)
 
     def shadowUpdateCompleteHandler(self, payload, responseStatus, token):
-        print("shadow update completed: " + payload)
+        # print("shadow update completed: " + payload)
+        updateDone = True
     
     def shadowDeleteCompleteHandler(self, payload, responseStatus, token):
-        print("shadow delete completed: " + payload)
-
-        # test if we can still push
-        JSONPayload = '{"state":{"desired":{"property": 42}}}'
-        self._deviceShadow.shadowUpdate(JSONPayload, lambda payload, responseStatus, token: self.shadowUpdateCompleteHandler(payload, responseStatus, token), 5)
-
+        # print("shadow delete completed: " + payload)
+        deleteDone = True
 
     def connectDeviceShadow(self):
         host = "a30rsz8andmfjk.iot.ap-southeast-2.amazonaws.com"
@@ -61,31 +84,52 @@ class Device(object):
         self._shadowClient.configureMQTTOperationTimeout(5)  # 5 sec
         self._shadowClient.connect()
         self._deviceShadow = self._shadowClient.createShadowHandlerWithName(self._shadowName, True)
-        #self._deviceShadow.shadowDelete(lambda payload, responseStatus, token: self.shadowDeltaChangeHandler(payload, responseStatus, token), 5)
         self._deviceShadow.shadowRegisterDeltaCallback(lambda payload, responseStatus, token: self.shadowDeltaChangeHandler(payload, responseStatus, token))
-        JSONPayload = '{"state":{"desired":{"property": 42}}}'
-        self._deviceShadow.shadowUpdate(JSONPayload, lambda payload, responseStatus, token: self.shadowUpdateCompleteHandler(payload, responseStatus, token), 5)
-        self._deviceShadow.shadowDelete(lambda payload, responseStatus, token: self.shadowDeleteCompleteHandler(payload, responseStatus, token), 5)
 
 class DoorDevice(Device):
     def __init__(self):
         super(DoorDevice, self).__init__()
         self._shadowName = "XDimensionalDoor"
+        self._doorOpen = False
 
-    def openDoor(self):
-        print("updating shadow to flag door open")
+    def toShadowJSON(self):
+        desiredState = {}
+        desiredState["doorOpen"] = self._doorOpen
+        return json.dumps({"state": {"desired": desiredState}})
 
-    def closeDoor(self):
-        print("updating shadow to flag door closed")
+    def applyShadowJSON(self, shadowJSON):
+        unpackedJSON = json.loads(shadowJSON)
+        unpackedJSON = unpackedJSON["state"]
+        self._doorOpen = unpackedJSON["doorOpen"]
 
+    def open(self):
+        self._doorOpen = True
+        self.updateShadow()        
+
+    def close(self):
+        self._doorOpen = False
+        self.updateShadow()        
+        
 class DiscoDevice(Device):
     def __init__(self):
         super(DiscoDevice, self).__init__()
         self._shadowName = "DiscoMaster2000"
 
-    def playbackStateChanged(self):
-        print("our playback shadow state was changed")
+    def shadowDeltaChangeHandler(self, payload, responseStatus, token):
+        self.applyShadowJSON(payload)
 
+    def playDisco(self):
+        print("shake your booty on the dance floor!")
+
+    def toShadowJSON(self):
+        return ""
+
+    def applyShadowJSON(self, shadowJSON):
+        unpackedJSON = json.loads(shadowJSON)
+        unpackedJSON = unpackedJSON["state"]
+        if unpackedJSON["playbackStart"]:
+            self.playDisco()
+        
 class DoorThread(threading.Thread):
     def __init__(self, doorInstance):
         super(DoorThread, self).__init__()
@@ -108,7 +152,7 @@ class DiscoThread(threading.Thread):
             
 # Configure logging
 logger = logging.getLogger("AWSIoTPythonSDK.core")
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.ERROR)
 streamHandler = logging.StreamHandler()
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 streamHandler.setFormatter(formatter)
@@ -120,7 +164,10 @@ door = DoorDevice()
 door.connectDeviceShadow()
 
 disco = DiscoDevice()
-#disco.connectDeviceShadow()
+disco.connectDeviceShadow()
+
+print("about to open door")
+door.open()
 
 doorTestThread = DoorThread(door)
 discoTestThread = DiscoThread(disco)
