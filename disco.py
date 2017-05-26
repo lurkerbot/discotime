@@ -28,11 +28,18 @@ import logging
 import time
 import json
 import getopt
+import requests
 
 class Device(object):
     def __init__(self):
         self._shadowName = "<<UNNAMEDDEVICE>>"
-
+        self._macAddress = open('/sys/class/net/eth0/address').read()
+        self._doorOpenStartTime = 0
+        request = requests.get("http://freegeoip.net/json")
+        requestJSON = json.loads(request.text)
+        self._latitude = requestJSON["latitude"]
+        self._longitude = requestJSON["longitude"]
+        
     '''
         push current class instance state as JSON to IoT shadow device
     '''
@@ -58,10 +65,11 @@ class Device(object):
         assert(False) # must implement
 
     def shadowDeltaChangeHandler(self, payload, responseStatus, token):
+        print("our shadow was updated: " + payload)
         self.applyShadowJSON(payload)
 
     def shadowUpdateCompleteHandler(self, payload, responseStatus, token):
-        # print("shadow update completed: " + payload)
+        print("shadow update completed: " + payload)
         updateDone = True
     
     def shadowDeleteCompleteHandler(self, payload, responseStatus, token):
@@ -86,15 +94,35 @@ class Device(object):
         self._deviceShadow = self._shadowClient.createShadowHandlerWithName(self._shadowName, True)
         self._deviceShadow.shadowRegisterDeltaCallback(lambda payload, responseStatus, token: self.shadowDeltaChangeHandler(payload, responseStatus, token))
 
+    def sendShadowUpdate(self, payload):
+        self._deviceShadow.shadowUpdate(payload, lambda payload, responseStatus, token: self.shadowUpdateCompleteHandler(payload, responseStatus, token), 5)
+
+    def desiredStateDictionary(self):
+        desiredState = {}
+        desiredState["macaddress"] = self._macAddress.rstrip("\n")
+        desiredState["latitude"] = self._latitude
+        desiredState["longitude"] = self._longitude
+        return desiredState
+        
+# Class DoorDevice extends class device by adding functions specific to the DAAS connected door
 class DoorDevice(Device):
     def __init__(self):
         super(DoorDevice, self).__init__()
         self._shadowName = "XDimensionalDoor"
         self._doorOpen = False
 
+    def desiredStateDictionary(self):
+        desiredState = super(DoorDevice, self).desiredStateDictionary()
+        if self._doorOpen:
+            desiredState["doorstate"] = "open"
+            desiredState["timeopen"] = "0"
+        else:
+            desiredState["doorstate"] = "closed"
+            desiredState["timeopen"] = self._openDuration
+        return desiredState
+            
     def toShadowJSON(self):
-        desiredState = {}
-        desiredState["doorOpen"] = self._doorOpen
+        desiredState = self.desiredStateDictionary()
         return json.dumps({"state": {"desired": desiredState}})
 
     def applyShadowJSON(self, shadowJSON):
@@ -104,10 +132,12 @@ class DoorDevice(Device):
 
     def open(self):
         self._doorOpen = True
+        self._doorOpenStartTime = time.time()
         self.updateShadow()        
 
     def close(self):
         self._doorOpen = False
+        self._openDuration = str(time.time() - self._doorOpenStartTime)
         self.updateShadow()        
         
 class DiscoDevice(Device):
@@ -125,6 +155,8 @@ class DiscoDevice(Device):
         return ""
 
     def applyShadowJSON(self, shadowJSON):
+        print("DiscoDevice shadow update: " + shadowJSON)
+
         unpackedJSON = json.loads(shadowJSON)
         unpackedJSON = unpackedJSON["state"]
         if unpackedJSON["playbackStart"]:
@@ -150,30 +182,30 @@ class DiscoThread(threading.Thread):
             time.sleep(1)
             print("tock")
             
-# Configure logging
-logger = logging.getLogger("AWSIoTPythonSDK.core")
-logger.setLevel(logging.ERROR)
-streamHandler = logging.StreamHandler()
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-streamHandler.setFormatter(formatter)
-logger.addHandler(streamHandler)
-
-# now kick things off
-
-door = DoorDevice()
-door.connectDeviceShadow()
-
-disco = DiscoDevice()
-disco.connectDeviceShadow()
-
-print("about to open door")
-door.open()
-
-doorTestThread = DoorThread(door)
-discoTestThread = DiscoThread(disco)
-
-#discoTestThread.start()
-#doorTestThread.start()
-
-while True:
-    pass
+## Configure logging
+#logger = logging.getLogger("AWSIoTPythonSDK.core")
+#logger.setLevel(logging.ERROR)
+#streamHandler = logging.StreamHandler()
+#formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+#streamHandler.setFormatter(formatter)
+#logger.addHandler(streamHandler)
+#
+## now kick things off
+#
+#door = DoorDevice()
+#door.connectDeviceShadow()
+#
+#disco = DiscoDevice()
+#disco.connectDeviceShadow()
+#
+#print("about to open door")
+#door.open()
+#
+#doorTestThread = DoorThread(door)
+#discoTestThread = DiscoThread(disco)
+#
+##discoTestThread.start()
+##doorTestThread.start()
+#
+#while True:
+#    pass
