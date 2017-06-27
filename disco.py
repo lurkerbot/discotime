@@ -1,27 +1,10 @@
-'''
-/*
- * Copyright 2010-2017 Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License").
- * You may not use this file except in compliance with the License.
- * A copy of the License is located at
- *
- *  http://aws.amazon.com/apache2.0
- *
- * or in the "license" file accompanying this file. This file is distributed
- * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- * express or implied. See the License for the specific language governing
- * permissions and limitations under the License.
- */
- '''
-
-# drag in the SDK from two dirs up
 import sys
-import json
 
+# drag in the SDK from aws-iot-device-sdk-python
 sys.path.append("aws-iot-device-sdk-python")
 from AWSIoTPythonSDK.MQTTLib import AWSIoTMQTTShadowClient
 
+import json
 import os
 import threading
 import logging
@@ -30,15 +13,28 @@ import json
 import getopt
 import requests
 
+# configure logging
+
+Logger = logging.getLogger("AWSIoTPythonSDK.core")
+Logger.setLevel(logging.ERROR)
+streamHandler = logging.StreamHandler()
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+streamHandler.setFormatter(formatter)
+Logger.addHandler(streamHandler)
+
 class Device(object):
     def __init__(self):
         self._shadowName = "<<UNNAMEDDEVICE>>"
         self._macAddress = open('/sys/class/net/eth0/address').read()
         self._doorOpenStartTime = 0
-        request = requests.get("http://freegeoip.net/json")
-        requestJSON = json.loads(request.text)
-        self._latitude = requestJSON["latitude"]
-        self._longitude = requestJSON["longitude"]
+        try:
+            request = requests.get("http://freegeoip.net/json")
+            requestJSON = json.loads(request.text)
+            self._latitude = requestJSON["latitude"]
+            self._longitude = requestJSON["longitude"]
+        except:
+            self._latitude = 0
+            self._longitude = 0
         
     '''
         push current class instance state as JSON to IoT shadow device
@@ -54,8 +50,8 @@ class Device(object):
         call
     '''
     def toShadowJSON(self):
-        assert(False) # must implement
-        return ""
+        desiredState = self.desiredStateDictionary()
+        return json.dumps({"state": {"desired": desiredState}})
 
     '''
         sublcasses implement this method to apply IoT shadow update
@@ -68,31 +64,44 @@ class Device(object):
         print("our shadow was updated: " + payload)
         self.applyShadowJSON(payload)
 
+    def shadowGetCompleteHandler(self, payload, responseStatus, token):
+        print("shadow get complete: " + payload)
+        self.applyShadowJSON(payload)
+        
     def shadowUpdateCompleteHandler(self, payload, responseStatus, token):
         print("shadow update completed: " + payload)
         updateDone = True
     
     def shadowDeleteCompleteHandler(self, payload, responseStatus, token):
-        # print("shadow delete completed: " + payload)
+        print("shadow delete completed: " + payload)
         deleteDone = True
 
     def connectDeviceShadow(self):
-        host = "a30rsz8andmfjk.iot.ap-southeast-2.amazonaws.com"
-        rootCAPath = "private/root-CA.crt"
-        privateKeyPath = "private/DAAS_Door.private.key"
-        certificatePath = "private/DAAS_Door.cert.pem"
+        #host = "a30rsz8andmfjk.iot.ap-southeast-2.amazonaws.com"
+        #rootCAPath = "private/root-CA.crt"
 
+        #host = "192.168.3.214"
+        host = "127.0.0.1"
+        rootCAPath = "private/core/dev.crt"
+        
+        print(self._shadowName)
+    
         self._shadowClient = AWSIoTMQTTShadowClient(self._shadowName)
         self._shadowClient.configureEndpoint(host, 8883)
-        self._shadowClient.configureCredentials(rootCAPath, privateKeyPath, certificatePath)
+        self._shadowClient.configureCredentials(rootCAPath, self._privateKeyPath, self._certificatePath)
 
         # AWSIoTMQTTShadowClient configuration
-        self._shadowClient.configureAutoReconnectBackoffTime(1, 32, 20)
+        self._shadowClient.configureAutoReconnectBackoffTime(5, 250, 20)
         self._shadowClient.configureConnectDisconnectTimeout(10)  # 10 sec
-        self._shadowClient.configureMQTTOperationTimeout(5)  # 5 sec
+        self._shadowClient.configureMQTTOperationTimeout(25)  # 5 sec
         self._shadowClient.connect()
+
         self._deviceShadow = self._shadowClient.createShadowHandlerWithName(self._shadowName, True)
         self._deviceShadow.shadowRegisterDeltaCallback(lambda payload, responseStatus, token: self.shadowDeltaChangeHandler(payload, responseStatus, token))
+
+        print("device connected")
+        # restore our state to that of the shadow device on our IoT service
+        #self.updateShadow()
 
     def sendShadowUpdate(self, payload):
         self._deviceShadow.shadowUpdate(payload, lambda payload, responseStatus, token: self.shadowUpdateCompleteHandler(payload, responseStatus, token), 5)
@@ -103,14 +112,23 @@ class Device(object):
         desiredState["latitude"] = self._latitude
         desiredState["longitude"] = self._longitude
         return desiredState
+
+    def getShadowState(self):
+        self._deviceShadow.shadowGet(lambda payload, responseStatus, token: self.shadowGetCompleteHandler(payload, responseStatus, token), 2)
         
 # Class DoorDevice extends class device by adding functions specific to the DAAS connected door
 class DoorDevice(Device):
     def __init__(self):
         super(DoorDevice, self).__init__()
-        self._shadowName = "XDimensionalDoor"
+        self._shadowName = "DAAS_FrontDoor"
         self._doorOpen = False
+        self._openDuration = 0
 
+    def connectDeviceShadow(self):
+        self._privateKeyPath = "private/door/806bf01189-private.pem.key"
+        self._certificatePath = "private/door/806bf01189-certificate.pem.crt"
+        super(DoorDevice, self).connectDeviceShadow()
+        
     def desiredStateDictionary(self):
         desiredState = super(DoorDevice, self).desiredStateDictionary()
         if self._doorOpen:
@@ -143,7 +161,13 @@ class DoorDevice(Device):
 class DiscoDevice(Device):
     def __init__(self):
         super(DiscoDevice, self).__init__()
-        self._shadowName = "DiscoMaster2000"
+        self._chanceOfRain = 0
+        self._shadowName = "DAAS_Player"
+
+    def connectDeviceShadow(self):
+        self._privateKeyPath = "private/player/14a52be2ca-private.pem.key"
+        self._certificatePath = "private/player/14a52be2ca-certificate.pem.crt"
+        super(DiscoDevice, self).connectDeviceShadow()
 
     def shadowDeltaChangeHandler(self, payload, responseStatus, token):
         self.applyShadowJSON(payload)
@@ -151,61 +175,109 @@ class DiscoDevice(Device):
     def playDisco(self):
         print("shake your booty on the dance floor!")
 
-    def toShadowJSON(self):
-        return ""
-
     def applyShadowJSON(self, shadowJSON):
         print("DiscoDevice shadow update: " + shadowJSON)
-
+        print(time.time())
+        print("---")
         unpackedJSON = json.loads(shadowJSON)
         unpackedJSON = unpackedJSON["state"]
         if unpackedJSON["playbackStart"]:
             self.playDisco()
-        
-class DoorThread(threading.Thread):
-    def __init__(self, doorInstance):
-        super(DoorThread, self).__init__()
-        self._doorInstance = doorInstance
 
-    def run(self):
-        while True:
-            time.sleep(1)
-            print("tick")
-            
-class DiscoThread(threading.Thread):
+    def checkWeather(self):
+        Logger.log(logging.INFO, "Device's reported latitude: " + str(self._latitude))
+        Logger.log(logging.INFO, "Device's reported longitude: " + str(self._longitude))
+        Logger.log(logging.INFO, "Passing device geo-location to worldweatheronline to see if it is raining")
+        apiurl = "http://api.worldweatheronline.com/premium/v1/weather.ashx?key=d4dab5e2738542f884000750172904&q=%s,%s&num_of_days=1&format=json&localObsTime=yes" % (self._latitude, self._longitude)
+        Logger.log(logging.INFO, "Making HTTP GET request to the following url: " + apiurl)
+ 
+        chance_of_rain = 0
+        response = requests.get(apiurl)
+        
+        try:
+            json_weather = response.json()
+	    chance_of_rain = json_weather["data"]["weather"][0]["hourly"][0]["chanceofrain"]
+        except ValueError:
+	    print("Full response from worldweatheronline: ", json_weather)
+
+        Logger.log(logging.INFO, "chance_of_rain: " + str(chance_of_rain))            
+        self._chanceOfRain = int(chance_of_rain)
+        
+    def pollPlaylist(self):
+        print("checking for latest disco playlist")
+
+class PlaylistDevice(Device):
+    def __init__(self):
+        super(PlaylistDevice, self).__init__()
+        self._chanceOfRain = 0
+        # test
+        self._shadowName = "DAAS_Playlist"
+
+    def connectDeviceShadow(self):
+        self._privateKeyPath = "private/playlist/1e055a15f2-private.pem.key"
+        self._certificatePath = "private/playlist/1e055a15f2-certificate.pem.crt"
+        super(PlaylistDevice, self).connectDeviceShadow()
+
+    def shadowUpdateCompleteHandler(self, payload, responseStatus, token):
+        print("snarf shadow update completed: " + payload)
+        updateDone = True
+
+    def applyShadowJSON(self, shadowJSON):
+        print("DiscoDevice shadow update: " + shadowJSON)
+        print(time.time())
+        print("---")
+        #unpackedJSON = json.loads(shadowJSON)
+        #unpackedJSON = unpackedJSON["state"]
+        #if unpackedJSON["playbackStart"]:
+        #    self.playDisco()
+        
+class DiscoBackgroundThread(threading.Thread):
     def __init__(self, discoInstance):
-        super(DiscoThread, self).__init__()
+        super(DiscoBackgroundThread, self).__init__()
         self._discoInstance = discoInstance
 
     def run(self):
-        while True:
-            time.sleep(1)
-            print("tock")
+        try:
+            while True:
+                self._discoInstance.checkWeather()
+                self._discoInstance.pollPlaylist()
+                time.sleep(10)
+        except KeyboardInterrupt:
+            Logger.log(logging.INFO, "leaving thread")
             
-## Configure logging
-#logger = logging.getLogger("AWSIoTPythonSDK.core")
-#logger.setLevel(logging.ERROR)
-#streamHandler = logging.StreamHandler()
-#formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-#streamHandler.setFormatter(formatter)
-#logger.addHandler(streamHandler)
 #
 ## now kick things off
 #
-#door = DoorDevice()
-#door.connectDeviceShadow()
+door = DoorDevice()
+door.connectDeviceShadow()
 #
-#disco = DiscoDevice()
-#disco.connectDeviceShadow()
-#
-#print("about to open door")
-#door.open()
-#
-#doorTestThread = DoorThread(door)
-#discoTestThread = DiscoThread(disco)
-#
-##discoTestThread.start()
+disco = DiscoDevice()
+disco.connectDeviceShadow()
+
+playlist = PlaylistDevice()
+playlist.connectDeviceShadow()
+
+#discoTestThread = DiscoBackgroundThread(disco)
+#discoTestThread.start()
 ##doorTestThread.start()
-#
-#while True:
-#    pass
+
+try:
+    while True:
+        #Logger.log(logging.INFO, "---")
+        #Logger.log(logging.INFO, "open door")
+        #door.open()
+        #Logger.log(logging.INFO, "time: " + str(time.time()))
+        #Logger.log(logging.INFO, "---")
+        #playlist.getShadowState()
+        #playlist.updateShadow()
+        time.sleep(3)
+        #Logger.log(logging.INFO, "close door")
+        #door.close()
+        #time.sleep(5)
+
+except KeyboardInterrupt:
+        print 'Interrupted'
+        try:
+            sys.exit(0)
+        except SystemExit:
+            os._exit(0)
