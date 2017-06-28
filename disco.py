@@ -4,7 +4,9 @@ import sys
 sys.path.append("aws-iot-device-sdk-python")
 from AWSIoTPythonSDK.MQTTLib import AWSIoTMQTTShadowClient
 
+from threading import Thread, Lock
 import json
+import urllib.request
 import os
 import threading
 import logging
@@ -12,6 +14,7 @@ import time
 import json
 import getopt
 import requests
+import pprint
 
 # configure logging
 
@@ -163,6 +166,10 @@ class DiscoDevice(Device):
         super(DiscoDevice, self).__init__()
         self._chanceOfRain = 0
         self._shadowName = "DAAS_Player"
+        self._playlistDataMutex = Lock()
+        self._playlistData = {}
+        self.checkWeather()
+        self.checkPlaylist()
 
     def connectDeviceShadow(self):
         self._privateKeyPath = "private/player/14a52be2ca-private.pem.key"
@@ -184,6 +191,19 @@ class DiscoDevice(Device):
         if unpackedJSON["playbackStart"]:
             self.playDisco()
 
+    # write our derived class properties to our serialised state dictionary
+    def desiredStateDictionary(self):
+        stateDict = super(DiscoDevice, self).desiredStateDictionary()
+
+        # protect reads of this blob of data - the background playlist update
+        # thread may well be writing to it
+        self._playlistDataMutex.acquire()
+        stateDict["playlist"] = self._playlistData
+        self._playlistDataMutex.release()
+
+        stateDict["chance_of_rain"] = self._chanceOfRain
+        return stateDict
+
     def checkWeather(self):
         Logger.log(logging.INFO, "Device's reported latitude: " + str(self._latitude))
         Logger.log(logging.INFO, "Device's reported longitude: " + str(self._longitude))
@@ -196,15 +216,37 @@ class DiscoDevice(Device):
         
         try:
             json_weather = response.json()
-	    chance_of_rain = json_weather["data"]["weather"][0]["hourly"][0]["chanceofrain"]
-        except ValueError:
-	    print("Full response from worldweatheronline: ", json_weather)
+            chance_of_rain = json_weather["data"]["weather"][0]["hourly"][0]["chanceofrain"]
+        except ValueError as e:
+            Logger.log(logging.ERROR, "Full response from worldweatheronline: ", e)
 
         Logger.log(logging.INFO, "chance_of_rain: " + str(chance_of_rain))            
         self._chanceOfRain = int(chance_of_rain)
-        
-    def pollPlaylist(self):
+
+    '''
+        calls API gateway endpoint with access key to extract json dump from dynamodb table which
+        contains the playlist and ownername
+
+        - thread safe
+    '''    
+    def checkPlaylist(self):
+        locked = False
         print("checking for latest disco playlist")
+
+        try:
+            url = "https://yoq0oxlvog.execute-api.ap-southeast-2.amazonaws.com/base?macaddr=%s" % (self._macAddress)
+            request = urllib.request.Request(url, headers = {"x-api-key": "ULi868dax46EqcuBr1Y6X7llnNOyZS8i48yKf1E9"})
+            with urllib.request.urlopen(request) as response:
+                data = response.read()
+                self._playlistDataMutex.acquire()
+                locked = True
+                self._playlistData = json.loads(data)
+                Logger.log(logging.INFO, "got playlist")
+        except Exception as e:
+            Logger.log(logging.INFO, "playlist fetch error: " + str(e))
+        finally:
+            if locked:
+                self._playlistDataMutex.release()
 
 class PlaylistDevice(Device):
     def __init__(self):
@@ -240,7 +282,7 @@ class DiscoBackgroundThread(threading.Thread):
         try:
             while True:
                 self._discoInstance.checkWeather()
-                self._discoInstance.pollPlaylist()
+                self._discoInstance.checkPlaylist()
                 time.sleep(10)
         except KeyboardInterrupt:
             Logger.log(logging.INFO, "leaving thread")
@@ -248,18 +290,17 @@ class DiscoBackgroundThread(threading.Thread):
 #
 ## now kick things off
 #
-door = DoorDevice()
-door.connectDeviceShadow()
+#door = DoorDevice()
+#door.connectDeviceShadow()
 #
 disco = DiscoDevice()
-disco.connectDeviceShadow()
+#disco.connectDeviceShadow()
 
-playlist = PlaylistDevice()
-playlist.connectDeviceShadow()
+#playlist = PlaylistDevice()
+#playlist.connectDeviceShadow()
 
-#discoTestThread = DiscoBackgroundThread(disco)
-#discoTestThread.start()
-##doorTestThread.start()
+discoTestThread = DiscoBackgroundThread(disco)
+discoTestThread.start()
 
 try:
     while True:
@@ -271,12 +312,13 @@ try:
         #playlist.getShadowState()
         #playlist.updateShadow()
         time.sleep(3)
+        pprint.pprint(json.loads(disco.toShadowJSON()))
         #Logger.log(logging.INFO, "close door")
         #door.close()
         #time.sleep(5)
 
 except KeyboardInterrupt:
-        print 'Interrupted'
+        print('Interrupted')
         try:
             sys.exit(0)
         except SystemExit:
