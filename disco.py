@@ -16,6 +16,13 @@ import getopt
 import requests
 import pprint
 
+# HACK
+import boto3
+import random
+from datetime import datetime
+from datetime import timedelta
+import time
+
 # configure logging
 
 Logger = logging.getLogger("AWSIoTPythonSDK.core")
@@ -28,7 +35,7 @@ Logger.addHandler(streamHandler)
 class Device(object):
     def __init__(self):
         self._shadowName = "<<UNNAMEDDEVICE>>"
-        self._macAddress = open('/sys/class/net/eth0/address').read()
+        self._macAddress = "-" # open('/sys/class/net/eth0/address').read()
         self._doorOpenStartTime = 0
         try:
             request = requests.get("http://freegeoip.net/json")
@@ -126,6 +133,18 @@ class DoorDevice(Device):
         self._shadowName = "DAAS_FrontDoor"
         self._doorOpen = False
         self._openDuration = 0
+        self._chanceOfRain = 0
+        self._playlistDataMutex = Lock()
+        self._playlistData = {}
+        time_and_vol = self.time_check(self._latitude, self._longitude)
+        self._localTimeString = time_and_vol["local_time_str"]
+        self._volume = time_and_vol["volume"]
+        self.checkWeather()
+        self.checkPlaylist()
+        self._s3 = boto3.resource('s3', region_name='ap-southeast-2')
+        self._S3PollyBucket = self._s3.Bucket('daas-polly-files')
+        self._S3Client = boto3.client('s3')
+        self._pollyClient = boto3.client('polly', region_name = 'us-west-2')
 
     def connectDeviceShadow(self):
         self._privateKeyPath = "private/door/806bf01189-private.pem.key"
@@ -140,12 +159,20 @@ class DoorDevice(Device):
         else:
             desiredState["doorstate"] = "closed"
             desiredState["timeopen"] = self._openDuration
+
+        # protect reads of this blob of data - the background playlist update
+        # thread may well be writing to it
+        self._playlistDataMutex.acquire()
+        desiredState["playlist"] = self._playlistData
+        self._playlistDataMutex.release()
+
+        desiredState["chance_of_rain"] = self._chanceOfRain
+        desiredState["current_temp"] = self._currentTemp
+        desiredState["local_time_str"] = self._localTimeString
+        desiredState["volume"] = self._volume
+
         return desiredState
             
-    def toShadowJSON(self):
-        desiredState = self.desiredStateDictionary()
-        return json.dumps({"state": {"desired": desiredState}})
-
     def applyShadowJSON(self, shadowJSON):
         unpackedJSON = json.loads(shadowJSON)
         unpackedJSON = unpackedJSON["state"]
@@ -154,74 +181,94 @@ class DoorDevice(Device):
     def open(self):
         self._doorOpen = True
         self._doorOpenStartTime = time.time()
-        self.updateShadow()        
+        time_and_vol = self.time_check(self._latitude, self._longitude)
+        self._localTimeString = time_and_vol["local_time_str"]
+        self._volume = time_and_vol["volume"]
+        #self.updateShadow()        
+        self.mockedLambda(json.loads(self.toShadowJSON()))
 
     def close(self):
         self._doorOpen = False
         self._openDuration = str(time.time() - self._doorOpenStartTime)
-        self.updateShadow()        
-        
-class DiscoDevice(Device):
-    def __init__(self):
-        super(DiscoDevice, self).__init__()
-        self._chanceOfRain = 0
-        self._shadowName = "DAAS_Player"
-        self._playlistDataMutex = Lock()
-        self._playlistData = {}
-        self.checkWeather()
-        self.checkPlaylist()
-
-    def connectDeviceShadow(self):
-        self._privateKeyPath = "private/player/14a52be2ca-private.pem.key"
-        self._certificatePath = "private/player/14a52be2ca-certificate.pem.crt"
-        super(DiscoDevice, self).connectDeviceShadow()
-
-    def shadowDeltaChangeHandler(self, payload, responseStatus, token):
-        self.applyShadowJSON(payload)
-
-    def playDisco(self):
-        print("shake your booty on the dance floor!")
-
-    def applyShadowJSON(self, shadowJSON):
-        print("DiscoDevice shadow update: " + shadowJSON)
-        print(time.time())
-        print("---")
-        unpackedJSON = json.loads(shadowJSON)
-        unpackedJSON = unpackedJSON["state"]
-        if unpackedJSON["playbackStart"]:
-            self.playDisco()
-
-    # write our derived class properties to our serialised state dictionary
-    def desiredStateDictionary(self):
-        stateDict = super(DiscoDevice, self).desiredStateDictionary()
-
-        # protect reads of this blob of data - the background playlist update
-        # thread may well be writing to it
-        self._playlistDataMutex.acquire()
-        stateDict["playlist"] = self._playlistData
-        self._playlistDataMutex.release()
-
-        stateDict["chance_of_rain"] = self._chanceOfRain
-        return stateDict
+        #self.updateShadow()        
+        self.mockedLambda(self.toShadowJSON())
 
     def checkWeather(self):
         Logger.log(logging.INFO, "Device's reported latitude: " + str(self._latitude))
         Logger.log(logging.INFO, "Device's reported longitude: " + str(self._longitude))
         Logger.log(logging.INFO, "Passing device geo-location to worldweatheronline to see if it is raining")
-        apiurl = "http://api.worldweatheronline.com/premium/v1/weather.ashx?key=d4dab5e2738542f884000750172904&q=%s,%s&num_of_days=1&format=json&localObsTime=yes" % (self._latitude, self._longitude)
+        apiurl = "http://api.worldweatheronline.com/premium/v1/weather.ashx?key=4d8f5ad3106b492ba1323348172206&q=%s,%s&num_of_days=1&format=json&localObsTime=yes" % (self._latitude, self._longitude)
         Logger.log(logging.INFO, "Making HTTP GET request to the following url: " + apiurl)
  
         chance_of_rain = 0
+        ct = 0
+
         response = requests.get(apiurl)
-        
+        json_weather = "no weather"
+        print(apiurl)
+
         try:
             json_weather = response.json()
             chance_of_rain = json_weather["data"]["weather"][0]["hourly"][0]["chanceofrain"]
-        except ValueError as e:
-            Logger.log(logging.ERROR, "Full response from worldweatheronline: ", e)
+            ct = json_weather["data"]["current_condition"][0]["temp_C"]
+        except:
+            Logger.log(logging.ERROR, "Full response from worldweatheronline: " + str(json_weather))
 
-        Logger.log(logging.INFO, "chance_of_rain: " + str(chance_of_rain))            
+        Logger.log(logging.INFO, "chance_of_rain: " + str(chance_of_rain))  
+
         self._chanceOfRain = int(chance_of_rain)
+        self._currentTemp = ct
+
+    def which_song_to_play(self, songs):
+        songcount = int(songs["Count"])
+        print("count: ", songcount)
+        songref = random.randint(0, songcount - 1)    
+        print("songref: ", songref)
+        song = songs["Items"][songref]
+        print("songname: ",song)
+        return song
+
+    def time_check(self, latitude, longitude):
+        print("Passing device geo-location to Google Maps TimeZone API to find local time offset")
+        epochtime = time.time()
+        print("epochtime: ", int(epochtime))
+        apiurl = 'https://maps.googleapis.com/maps/api/timezone/json?location=%s,%s&timestamp=%d&key=AIzaSyBy-rsJ2uG-CEAWglzqdZEqMArAvrGEuFs' % (latitude,longitude,int(epochtime))
+        print("Making HTTP GET request to the following url: ", apiurl)
+        response = requests.get(apiurl)
+
+        try:
+            json_timezone = response.json()
+            print("Successful call to Google Maps Time Zone API")
+        except ValueError:
+            json_timezone = response.text
+            print("Unsuccessful call to Google Maps Time Zone API")
+
+        print("Full response from Google Maps Timezone API: ", json_timezone)
+
+        if json_timezone["status"] == "OK":
+            # Calculate the local time at the provided geo-coordinates
+            print("Received results from Google Maps")
+            utc_offset = json_timezone["rawOffset"]+json_timezone["dstOffset"]
+            print("utc_offset: ", utc_offset)
+            utc_time_now = datetime.utcnow()
+            print("utc_time_now: ", utc_time_now)
+            local_time_now = utc_time_now + timedelta(seconds=utc_offset)
+            print("local_time_now: ", local_time_now)
+            print("hour: ", local_time_now.hour)
+            if int(local_time_now.hour) > 19:
+                print("Kids are in bed. Play disco at low volume")
+                volume = 0.5
+            else:
+                print("It's daytime. Play disco at full volume")
+                volume = 1.0
+
+            print("string datetime: ", str(local_time_now))
+            local_time_str=local_time_now.strftime('%I:%M%p')
+        else:
+            local_time_str = "unknown"    
+            print("No results from Google Maps")
+
+        return {'local_time_str': local_time_str, 'volume': volume}
 
     '''
         calls API gateway endpoint with access key to extract json dump from dynamodb table which
@@ -248,41 +295,132 @@ class DiscoDevice(Device):
             if locked:
                 self._playlistDataMutex.release()
 
-class PlaylistDevice(Device):
+    def createVoiceMessage(self, registeredOwner, current_temp, song_title, song_artist, time_str):
+        print("---")
+        print(registeredOwner)
+        print(current_temp)
+        print(song_title)
+        print(song_artist)
+        print(time_str)
+        print("---")
+
+        voiceMessage = "Welcome home " + registeredOwner + ", that was " + song_title + " by " + song_artist + ", the time is " + time_str + ", and the current temperature is " + str(current_temp) + " degrees." 
+        print("Calling Polly with message: ",voiceMessage)
+        response = self._pollyClient.synthesize_speech(Text=voiceMessage, VoiceId='Salli', OutputFormat='mp3')
+        data_stream = response.get("AudioStream")
+        filename = "%s.mp3" % registeredOwner
+        print("Polly has created audio file: ",filename)
+        self._S3PollyBucket.put_object(Key = filename, Body = data_stream.read())
+        url = self._S3Client.generate_presigned_url(
+            ClientMethod='get_object',
+            Params={
+                'Bucket': 'daas-polly-files',
+                'Key': filename
+            },
+            ExpiresIn=3000
+        )
+        print("Pre-signed url with synthesized voice message: ", url)
+        return url
+
+    def mockedLambda(self, event):
+        print("mockedLambda")
+        '''
+            TODO:
+            Test comment in zip archive - delete this line
+                - check whether the event JSON has open or closed state
+                - check weather based on location in event data
+                - log activity to elasticsearch for dashboard
+        '''
+        #pprint.pprint(event["state"]["desired"])
+        doorstate = event["state"]["desired"]["doorstate"]
+
+        if doorstate == "open":
+            print("The door is open")
+            # Using the MAC address of the device, lookup name of registered owner
+            registeredOwner = event["state"]["desired"]["playlist"]["Owner"]
+            print("Welcome home", registeredOwner)
+            
+            # Using the received latitude and longitude, determine current temperature and chance of rain
+            chance_of_rain = event["state"]["desired"]["chance_of_rain"]
+            current_temp = event["state"]["desired"]["current_temp"]
+            print("Current temp: ", current_temp)
+            chance_of_rain=50
+            
+            #If it's raining override song selection with "It's raining men", otherwise make song selection
+            if chance_of_rain == 100:
+                # FIX
+                songitem = songListTable.get_item(Key={'title': 'its_raining_men'})
+                song = songitem["Item"]
+            else:
+                song = self.which_song_to_play(event["state"]["desired"]["playlist"])    
+
+            print("song: ", song)
+
+            # Using the received latitude and longitude, determine local time
+            #time_volume = time_check(latitude, longitude)
+            time_at_disco = event["state"]["desired"]["local_time_str"]
+
+            #volume=time_volume["volume"]
+            volume = 1
+
+            payload = {'state':{'desired':{'playbackStart': 'True', 'volume': 1.0, 'duration': 5, 'song': {'mark_in': '01', 'song_name': 'Im so excited', 'artist': 'Pointer Sisters', 'title': 'im_so_excited'}, 'url': 'http:\\blah_blah.com'}}}
+            payload["state"]["desired"]["song"] = song
+            
+            voicemessageurl = self.createVoiceMessage(registeredOwner, current_temp, song['song_name'], song['artist'], time_at_disco)
+            payload["state"]["desired"]["url"] = voicemessageurl
+            payload["state"]["desired"]["volume"] = float(volume)
+            json_message = json.dumps(payload)
+            print("json_message: ", json_message)
+            #response = client.update_thing_shadow(thingName = "DiscoMaster2000", payload = json_message)
+            #print("response: ", response)
+            print("return payload: ", payload)
+            #To do. Log door opened status to elasticsearch
+        else:
+            print("The door is closed")
+            #To do. Log door closed status to elasticsearch
+
+        return "done"
+        
+class DiscoDevice(Device):
     def __init__(self):
-        super(PlaylistDevice, self).__init__()
-        self._chanceOfRain = 0
-        # test
-        self._shadowName = "DAAS_Playlist"
+        super(DiscoDevice, self).__init__()
+        self._shadowName = "DAAS_Player"
 
     def connectDeviceShadow(self):
-        self._privateKeyPath = "private/playlist/1e055a15f2-private.pem.key"
-        self._certificatePath = "private/playlist/1e055a15f2-certificate.pem.crt"
-        super(PlaylistDevice, self).connectDeviceShadow()
+        self._privateKeyPath = "private/player/14a52be2ca-private.pem.key"
+        self._certificatePath = "private/player/14a52be2ca-certificate.pem.crt"
+        super(DiscoDevice, self).connectDeviceShadow()
 
-    def shadowUpdateCompleteHandler(self, payload, responseStatus, token):
-        print("snarf shadow update completed: " + payload)
-        updateDone = True
+    def shadowDeltaChangeHandler(self, payload, responseStatus, token):
+        self.applyShadowJSON(payload)
+
+    def playDisco(self):
+        print("shake your booty on the dance floor!")
 
     def applyShadowJSON(self, shadowJSON):
         print("DiscoDevice shadow update: " + shadowJSON)
         print(time.time())
         print("---")
-        #unpackedJSON = json.loads(shadowJSON)
-        #unpackedJSON = unpackedJSON["state"]
-        #if unpackedJSON["playbackStart"]:
-        #    self.playDisco()
+        unpackedJSON = json.loads(shadowJSON)
+        unpackedJSON = unpackedJSON["state"]
+        if unpackedJSON["playbackStart"]:
+            self.playDisco()
+
+    # write our derived class properties to our serialised state dictionary
+    def desiredStateDictionary(self):
+        stateDict = super(DiscoDevice, self).desiredStateDictionary()
+        return stateDict
         
-class DiscoBackgroundThread(threading.Thread):
-    def __init__(self, discoInstance):
-        super(DiscoBackgroundThread, self).__init__()
-        self._discoInstance = discoInstance
+class LocalPollingThread(threading.Thread):
+    def __init__(self, doorInstance):
+        super(LocalPollingThread, self).__init__()
+        self._doorInstance = doorInstance
 
     def run(self):
         try:
             while True:
-                self._discoInstance.checkWeather()
-                self._discoInstance.checkPlaylist()
+                self._doorInstance.checkWeather()
+                self._doorInstance.checkPlaylist()
                 time.sleep(10)
         except KeyboardInterrupt:
             Logger.log(logging.INFO, "leaving thread")
@@ -290,29 +428,26 @@ class DiscoBackgroundThread(threading.Thread):
 #
 ## now kick things off
 #
-#door = DoorDevice()
+door = DoorDevice()
 #door.connectDeviceShadow()
 #
-disco = DiscoDevice()
+#disco = DiscoDevice()
 #disco.connectDeviceShadow()
 
-#playlist = PlaylistDevice()
-#playlist.connectDeviceShadow()
-
-discoTestThread = DiscoBackgroundThread(disco)
-discoTestThread.start()
+localPollingThread = LocalPollingThread(door)
+localPollingThread.start()
 
 try:
     while True:
         #Logger.log(logging.INFO, "---")
         #Logger.log(logging.INFO, "open door")
-        #door.open()
+        door.open()
         #Logger.log(logging.INFO, "time: " + str(time.time()))
         #Logger.log(logging.INFO, "---")
         #playlist.getShadowState()
         #playlist.updateShadow()
-        time.sleep(3)
-        pprint.pprint(json.loads(disco.toShadowJSON()))
+        time.sleep(5)
+        #pprint.pprint(json.loads(door.toShadowJSON()))
         #Logger.log(logging.INFO, "close door")
         #door.close()
         #time.sleep(5)
