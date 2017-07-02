@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-
 import time
 import json
 import RPi.GPIO as GPIO
@@ -11,8 +10,10 @@ sys.path.append("aws-iot-device-sdk-python")
 from AWSIoTPythonSDK.MQTTLib import AWSIoTMQTTShadowClient
 from disco import DoorDevice, DiscoDevice
 
-OUTPIN=13
-DOORPIN=23
+#DB1PIN=6
+#DB2PIN=13
+#DB3PIN=19
+DOORPIN=5
 DOORCLOSED=True
 SONG_DURATION=30
 
@@ -66,19 +67,14 @@ class DoorPollingThread(threading.Thread):
                                 current_event_time = time.time()
                                 self._door_state_changed_fn(self._door, current_door_state, last_event_time, current_event_time)
                                 last_event_time = current_event_time
-                                last_door_state = current_door_state
-                        
-                                
+                                last_door_state = current_door_state                        
                                 
 #print("GPI library version: " + GPIO.VERSION)
 
 #GPIO.cleanup()
 GPIO.setmode(GPIO.BCM)
-GPIO.setup(OUTPIN, GPIO.OUT)
-GPIO.output(OUTPIN, GPIO.HIGH)
-GPIO.setup(DOORPIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
-door = DoorDevice()
+door = DoorDevice(DOORPIN)
 door.connectDeviceShadow()
 
 disco = DiscoDevice()
@@ -87,16 +83,21 @@ disco.connectDeviceShadow()
 print("door device connected, listening...")
 
 try:
-        door_thread = DoorPollingThread(door_moved, DOORPIN, door)
-        door_thread.start()
-        
-        while True:
-                time.sleep(1)
+    door_thread = DoorPollingThread(door_moved, DOORPIN, door)
+    door_thread.start()
+
+    while True:
+        time.sleep(5)
+        door.open()
                 
 except KeyboardInterrupt:
-        GPIO.cleanup()
+    GPIO.cleanup()
+    door_thread.stop_polling()
+    try:
+        sys.exit(0)
+    except SystemExit:
+        os._exit(0)
 
 door_thread.stop_polling()
-
 GPIO.cleanup()
 
