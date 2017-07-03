@@ -88,7 +88,7 @@ try:
 
     while True:
         time.sleep(5)
-        door.open()
+        #door.open()
                 
 except KeyboardInterrupt:
     GPIO.cleanup()

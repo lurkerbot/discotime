@@ -404,10 +404,10 @@ class DiscoDevice(Device):
     def __init__(self):
         super(DiscoDevice, self).__init__()
         self._shadowName = "DAAS_Player"
-        self._s3 = boto3.resource('s3', region_name='ap-southeast-2', aws_access_key_id = "AKIAJYTJ7T3WRW7PIZGQ", aws_secret_access_key = "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")
+        self._s3 = boto3.resource('s3', region_name='ap-southeast-2', aws_access_key_id = "---", aws_secret_access_key = "---")
         self._S3PollyBucket = self._s3.Bucket('daas-polly-files')
-        self._S3Client = boto3.client('s3', aws_access_key_id = "AKIAJYTJ7T3WRW7PIZGQ", aws_secret_access_key = "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")
-        self._pollyClient = boto3.client('polly', region_name = 'us-west-2', aws_access_key_id = "AKIAJYTJ7T3WRW7PIZGQ", aws_secret_access_key = "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")
+        self._S3Client = boto3.client('s3', aws_access_key_id = "---", aws_secret_access_key = "---")
+        self._pollyClient = boto3.client('polly', region_name = 'us-west-2', aws_access_key_id = "---", aws_secret_access_key = "")
 
     def connectDeviceShadow(self):
         self._privateKeyPath = "private/player/14a52be2ca-private.pem.key"
