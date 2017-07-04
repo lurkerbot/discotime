@@ -15,6 +15,7 @@ import json
 import getopt
 import requests
 import pprint
+import socket
 
 import pygame
 import RPi.GPIO as GPIO
@@ -23,6 +24,8 @@ GPIO.setmode(GPIO.BCM)
 DB1PIN=26
 DB2PIN=13
 DB3PIN=6
+
+socket.setdefaulttimeout(3)
 
 # HACK
 import boto3
@@ -33,7 +36,7 @@ import time
 
 # configure logging
 Logger = logging.getLogger("AWSIoTPythonSDK.core")
-Logger.setLevel(logging.ERROR)
+Logger.setLevel(logging.INFO)
 streamHandler = logging.StreamHandler()
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 streamHandler.setFormatter(formatter)
@@ -42,7 +45,7 @@ Logger.addHandler(streamHandler)
 class Device(object):
     def __init__(self):
         self._shadowName = "<<UNNAMEDDEVICE>>"
-        self._macAddress = "-" # open('/sys/class/net/eth0/address').read()
+        self._macAddress = open('/sys/class/net/eth0/address').read()
         self._doorOpenStartTime = 0
         try:
             request = requests.get("http://freegeoip.net/json")
@@ -227,7 +230,7 @@ class DoorDevice(Device):
         print(apiurl)
 
         try:
-            nresponse = requests.get(apiurl)
+            response = requests.get(apiurl)
             json_weather = response.json()
             chance_of_rain = json_weather["data"]["weather"][0]["hourly"][0]["chanceofrain"]
             ct = json_weather["data"]["current_condition"][0]["temp_C"]
@@ -238,15 +241,6 @@ class DoorDevice(Device):
 
         self._chanceOfRain = int(chance_of_rain)
         self._currentTemp = ct
-
-    def which_song_to_play(self, songs):
-        songcount = int(songs["Count"])
-        print("count: ", songcount)
-        songref = random.randint(0, songcount - 1)    
-        print("songref: ", songref)
-        song = songs["Items"][songref]
-        print("songname: ",song)
-        return song
 
     def time_check(self, latitude, longitude):
         Logger.log(logging.INFO, "Passing device geo-location to Google Maps TimeZone API to find local time offset")
@@ -323,68 +317,6 @@ class DoorDevice(Device):
             if locked:
                 self._playlistDataMutex.release()
 
-    def getVoiceMessageText(self, registeredOwner, current_temp, song_title, song_artist, time_str):
-        return "Welcome home " + registeredOwner + ", that was " + song_title + " by " + song_artist + ", the time is " + time_str + ", and the current temperature is " + str(current_temp) + " degrees." 
-
-    def mockedLambda(self, event):
-        print("mockedLambda")
-        '''
-            TODO:
-            Test comment in zip archive - delete this line
-                - check whether the event JSON has open or closed state
-                - check weather based on location in event data
-                - log activity to elasticsearch for dashboard
-        '''
-        #pprint.pprint(event["state"]["desired"])
-        doorstate = event["state"]["desired"]["doorstate"]
-
-        if doorstate == "open":
-            print("The door is open")
-            # Using the MAC address of the device, lookup name of registered owner
-            registeredOwner = event["state"]["desired"]["playlist"]["Owner"]
-            print("Welcome home", registeredOwner)
-            
-            # Using the received latitude and longitude, determine current temperature and chance of rain
-            chance_of_rain = event["state"]["desired"]["chance_of_rain"]
-            current_temp = event["state"]["desired"]["current_temp"]
-            print("Current temp: ", current_temp)
-            chance_of_rain=50
-            
-            #If it's raining override song selection with "It's raining men", otherwise make song selection
-            if chance_of_rain == 100:
-                # FIX
-                songitem = songListTable.get_item(Key={'title': 'its_raining_men'})
-                song = songitem["Item"]
-            else:
-                song = self.which_song_to_play(event["state"]["desired"]["playlist"])    
-
-            print("song: ", song)
-
-            # Using the received latitude and longitude, determine local time
-            #time_volume = time_check(latitude, longitude)
-            time_at_disco = event["state"]["desired"]["local_time_str"]
-
-            #volume=time_volume["volume"]
-            volume = 1
-
-            payload = {'state':{'desired':{'playbackStart': 'True', 'volume': 1.0, 'duration': 5, 'song': {'mark_in': '01', 'song_name': 'Im so excited', 'artist': 'Pointer Sisters', 'title': 'im_so_excited'}, 'url': 'http:\\blah_blah.com'}}}
-            payload["state"]["desired"]["song"] = song
-            
-            #voicemessageurl = self.createVoiceMessage(registeredOwner, current_temp, song['song_name'], song['artist'], time_at_disco)
-            payload["state"]["desired"]["greeting_text"] = self.getVoiceMessageText(registeredOwner, current_temp, song['song_name'], song['artist'], time_at_disco)
-            payload["state"]["desired"]["volume"] = float(volume)
-            json_message = json.dumps(payload)
-            print("json_message: ", json_message)
-            #response = client.update_thing_shadow(thingName = "DiscoMaster2000", payload = json_message)
-            #print("response: ", response)
-            print("return payload: ", payload)
-            #To do. Log door opened status to elasticsearch
-        else:
-            print("The door is closed")
-            #To do. Log door closed status to elasticsearch
-
-        return "done"
-
 class DiscoBall():
     def __init__(self, pin):
         self._pin = pin
@@ -403,11 +335,15 @@ class DiscoBall():
 class DiscoDevice(Device):
     def __init__(self):
         super(DiscoDevice, self).__init__()
+        
+        key_id = "-"
+        key_secret = "-"
+        
         self._shadowName = "DAAS_Player"
-        self._s3 = boto3.resource('s3', region_name='ap-southeast-2', aws_access_key_id = "---", aws_secret_access_key = "---")
+        self._s3 = boto3.resource('s3', region_name='ap-southeast-2', aws_access_key_id = key_id, aws_secret_access_key = key_secret)
         self._S3PollyBucket = self._s3.Bucket('daas-polly-files')
-        self._S3Client = boto3.client('s3', aws_access_key_id = "---", aws_secret_access_key = "---")
-        self._pollyClient = boto3.client('polly', region_name = 'us-west-2', aws_access_key_id = "---", aws_secret_access_key = "")
+        self._S3Client = boto3.client('s3', aws_access_key_id = key_id, aws_secret_access_key = key_secret)
+        self._pollyClient = boto3.client('polly', region_name = 'us-west-2', aws_access_key_id = key_id, aws_secret_access_key = key_secret)
 
     def connectDeviceShadow(self):
         self._privateKeyPath = "private/player/14a52be2ca-private.pem.key"
@@ -418,21 +354,24 @@ class DiscoDevice(Device):
         self.applyShadowJSON(payload)
 
     def createPollyMessageURL(self, messageText, registeredOwner):
-        print("Calling Polly with message: ", messageText)
-        response = self._pollyClient.synthesize_speech(Text = messageText, VoiceId = 'Salli', OutputFormat = 'mp3')
-        data_stream = response.get("AudioStream")
-        filename = "%s.mp3" % registeredOwner
-        print("Polly has created audio file: ", filename)
-        self._S3PollyBucket.put_object(Key = filename, Body = data_stream.read())
-        url = self._S3Client.generate_presigned_url(
-            ClientMethod='get_object',
-            Params={
-                'Bucket': 'daas-polly-files',
-                'Key': filename
-            },
-            ExpiresIn = 3000
-        )
-        print("Pre-signed url with synthesized voice message: ", url)
+        url = ""
+        try:
+            print("Calling Polly with message: ", messageText)
+            response = self._pollyClient.synthesize_speech(Text = messageText, VoiceId = 'Salli', OutputFormat = 'mp3')
+            data_stream = response.get("AudioStream")
+            filename = "%s.mp3" % registeredOwner
+            print("Polly has created audio file: ", filename)
+            self._S3PollyBucket.put_object(Key = filename, Body = data_stream.read())
+            url = self._S3Client.generate_presigned_url(
+                ClientMethod='get_object',
+                Params={
+                    'Bucket': 'daas-polly-files',
+                    'Key': filename
+                },
+                ExpiresIn = 3000
+            )
+        except:
+            url = ""
         return url
 
     def playDisco(self, songname, voiceMessage, registeredOwner, mark_in, volume, duration):
@@ -455,15 +394,17 @@ class DiscoDevice(Device):
         print("discostarttime: ",discostarttime)
         discoendtime=discostarttime+duration
         print("discoendtime: ",discoendtime)
-    
-        # Download the Welcome Home message while song plays
-        messageURL = self.createPollyMessageURL(voiceMessage, registeredOwner)
-        urllib.request.urlretrieve(messageURL, "voicemsg.mp3")
 
         pygame.mixer.music.play(start=float(mark_in))
 
-        while time.time() < discoendtime:
-            time.sleep(1)
+        # Download the Welcome Home message while song plays
+        messageURL = self.createPollyMessageURL(voiceMessage, registeredOwner)
+
+        if len(messageURL) > 0:
+            urllib.request.urlretrieve(messageURL, "voicemsg.mp3")
+
+            while time.time() < discoendtime:
+                time.sleep(1)
 
         time.sleep(5)
         pygame.mixer.music.fadeout(3000)
@@ -471,9 +412,11 @@ class DiscoDevice(Device):
         discoball1.stop()
         discoball2.stop()
         discoball3.stop()
-        pygame.mixer.music.load("voicemsg.mp3")
-        pygame.mixer.music.play()
-        time.sleep(10)
+
+        if len(messageURL) > 0:
+            pygame.mixer.music.load("voicemsg.mp3")
+            pygame.mixer.music.play()
+            time.sleep(10)
         
         pygame.mixer.quit()
 
@@ -495,6 +438,7 @@ class DiscoDevice(Device):
 ## now kick things off
 #
 #door = DoorDevice(5)
+#door.checkWeather()
 #door.connectDeviceShadow()
 #
 #disco = DiscoDevice()
