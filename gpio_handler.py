@@ -23,21 +23,14 @@ SONG_DURATION=30
 
 def door_moved(door, state, previous_event_time, current_event_time):
         state_change_time = time.time()
-        #print("duration of last state = " + str(current_event_time - previous_event_time))
         DOORCLOSED=state
         if (DOORCLOSED):
                 print("Door is closed, it was open for",str(current_event_time - previous_event_time))
-                #payload = '{"state":{"reported":{"doorstate":"closed","timeopen":' + str(current_event_time - previous_event_time) + '}}}'
-                #print("payload is ",json.dumps(payload))
                 print("sending desired state to shadow")
-                #door.sendShadowUpdate(payload)
                 door.close()
         else:
                 print("Door is open")
-                #payload = '{"state":{"reported":{"doorstate":"open","timeopen":0}}}'
-                #print("payload is ",json.dumps(payload))
                 print("sending desired state to shadow")
-                #door.sendShadowUpdate(payload)
                 door.open()
         
 class DoorPollingThread(threading.Thread):
@@ -69,8 +62,6 @@ class DoorPollingThread(threading.Thread):
                                 last_event_time = current_event_time
                                 last_door_state = current_door_state                        
                                 
-#print("GPI library version: " + GPIO.VERSION)
-
 #GPIO.cleanup()
 GPIO.setmode(GPIO.BCM)
 

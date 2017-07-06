@@ -36,7 +36,7 @@ import time
 
 # configure logging
 Logger = logging.getLogger("AWSIoTPythonSDK.core")
-Logger.setLevel(logging.INFO)
+Logger.setLevel(logging.ERROR)
 streamHandler = logging.StreamHandler()
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 streamHandler.setFormatter(formatter)
@@ -170,6 +170,11 @@ class DoorDevice(Device):
         self._localPollingThread = LocalPollingThread(self)
         self._localPollingThread.start()
 
+        key_id = "-"
+        key_secret = "-"
+        self._s3 = boto3.resource('s3', region_name='ap-southeast-2', aws_access_key_id = key_id, aws_secret_access_key = key_secret)
+        self._S3DoorStatusBucket = self._s3.Bucket('daas-door-status')
+
     def connectDeviceShadow(self):
         self._privateKeyPath = "private/door/806bf01189-private.pem.key"
         self._certificatePath = "private/door/806bf01189-certificate.pem.crt"
@@ -196,7 +201,27 @@ class DoorDevice(Device):
         desiredState["volume"] = self._volume
 
         return desiredState
-            
+
+    def updateShadow(self):
+        super(DoorDevice, self).updateShadow()
+        # update the door-state.json file in the given S3 bucket
+        # so that our polling page can show it to a human
+
+        stateString = ""
+        if self._doorOpen:
+            stateString = "open"
+        else:
+            stateString = "closed"
+
+        webJSON = {"doorState": stateString,
+                   "registeredOwner": self._playlistData["Owner"]}
+        pprint.pprint(webJSON)
+
+        try:
+            self._S3DoorStatusBucket.put_object(Key = "door-status.json", Body = json.dumps(webJSON))
+        except:
+            print("s3 json status put error")
+
     def applyShadowJSON(self, shadowJSON):
         unpackedJSON = json.loads(shadowJSON)
         unpackedJSON = unpackedJSON["state"]
@@ -335,7 +360,7 @@ class DiscoBall():
 class DiscoDevice(Device):
     def __init__(self):
         super(DiscoDevice, self).__init__()
-        
+
         key_id = "-"
         key_secret = "-"
         
@@ -407,16 +432,27 @@ class DiscoDevice(Device):
                 time.sleep(1)
 
         time.sleep(5)
-        pygame.mixer.music.fadeout(3000)
-        time.sleep(3)
-        discoball1.stop()
-        discoball2.stop()
-        discoball3.stop()
+
+        try:
+            pygame.mixer.music.fadeout(3000)
+            time.sleep(3)
+        except:
+            print("mixer error")
+
+        try:
+            discoball1.stop()
+            discoball2.stop()
+            discoball3.stop()
+        except:
+            print("disco hw stop error")
 
         if len(messageURL) > 0:
-            pygame.mixer.music.load("voicemsg.mp3")
-            pygame.mixer.music.play()
-            time.sleep(10)
+            try:
+                pygame.mixer.music.load("voicemsg.mp3")
+                pygame.mixer.music.play()
+                time.sleep(10)
+            except:
+                print("message play error")
         
         pygame.mixer.quit()
 
@@ -424,10 +460,17 @@ class DiscoDevice(Device):
         #print("DiscoDevice shadow update: " + shadowJSON)
         #print(time.time())
         print("---")
+        
         unpackedJSON = json.loads(shadowJSON)
         unpackedJSON = unpackedJSON["state"]
+
         if unpackedJSON["playbackStart"]:
-            self.playDisco(unpackedJSON["song"]["title"], unpackedJSON["greeting_text"], "fixthis", unpackedJSON["song"]["mark_in"], unpackedJSON['volume'], unpackedJSON['duration'])
+            self.playDisco(unpackedJSON["song"]["title"],
+                           unpackedJSON["greeting_text"],
+                           unpackedJSON["registeredOwner"],
+                           unpackedJSON["song"]["mark_in"],
+                           unpackedJSON["volume"],
+                           unpackedJSON["duration"])
 
     # write our derived class properties to our serialised state dictionary
     def desiredStateDictionary(self):
