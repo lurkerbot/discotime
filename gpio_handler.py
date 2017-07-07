@@ -52,7 +52,7 @@ class DoorPollingThread(threading.Thread):
                 last_event_time = time.time()
                 last_door_state = GPIO.input(DOORPIN)
                 while not self._stop_event.is_set():
-                        self._stop_event.wait(0.2)
+                        self._stop_event.wait(0.05)
                         GPIO.setmode(GPIO.BCM)
                         GPIO.setup(DOORPIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
                         current_door_state = GPIO.input(DOORPIN)
