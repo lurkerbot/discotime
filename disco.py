@@ -145,8 +145,9 @@ class LocalPollingThread(threading.Thread):
     def run(self):
         try:
             while True:
-                self._doorInstance.checkWeather()
-                self._doorInstance.checkPlaylist()
+                if self._doorInstance.checkPlaylist():
+                    self._doorInstance.checkWeather()
+
                 time.sleep(360)
         except KeyboardInterrupt:
             Logger.log(logging.INFO, "leaving thread")
@@ -180,6 +181,16 @@ class DoorDevice(Device):
         self._privateKeyPath = "private/door/806bf01189-private.pem.key"
         self._certificatePath = "private/door/806bf01189-certificate.pem.crt"
         super(DoorDevice, self).connectDeviceShadow()
+
+        if self.checkPlaylist():
+            time_and_vol = self.time_check(self._latitude, self._longitude)
+            self._localTimeString = time_and_vol["local_time_str"]
+            self._volume = time_and_vol["volume"]
+            self.checkWeather()
+        else:
+            self._localTimeString = time.strftime("%I:%M%p")
+            self._volume = 0.5
+            self.getShadowState()
         
     def desiredStateDictionary(self):
         desiredState = super(DoorDevice, self).desiredStateDictionary()
@@ -223,17 +234,36 @@ class DoorDevice(Device):
         except:
             print("s3 json status put error")
 
+    def setPlaylist(self, playlist):
+        # protect reads of this blob of data - the background playlist update
+        # thread may well be writing to it
+        self._playlistDataMutex.acquire()
+        self._playlistData = playlist
+        self._playlistDataMutex.release()
+        
     def applyShadowJSON(self, shadowJSON):
-        unpackedJSON = json.loads(shadowJSON)
-        unpackedJSON = unpackedJSON["state"]
-        self._doorOpen = unpackedJSON["doorOpen"]
+        try:
+            unpackedJSON = json.loads(shadowJSON)["state"]["desired"]            
+            self.setPlaylist(unpackedJSON["playlist"])
+            self._doorOpen = unpackedJSON["doorstate"]
+            self._chanceOfRain = unpackedJSON["chance_of_rain"]
+            self._currentTemp = unpackedJSON["current_temp"]
+            self._localTimeString = unpackedJSON["local_time_str"]
+            self._volume = unpackedJSON["volume"]
+        except:
+            Logger.log(logging.ERROR, "door shadow get error")
 
     def open(self):
         self._doorOpen = True
         self._doorOpenStartTime = time.time()
         time_and_vol = self.time_check(self._latitude, self._longitude)
-        self._localTimeString = time_and_vol["local_time_str"]
-        self._volume = time_and_vol["volume"]
+
+        if time_and_vol["status"] == "OK":
+            self._localTimeString = time_and_vol["local_time_str"]
+            self._volume = time_and_vol["volume"]
+        else:
+            self._localTimeString = time.strftime("%I:%M%p")
+            
         self.updateShadow()        
         print("open sesame")
         
@@ -262,12 +292,12 @@ class DoorDevice(Device):
             ct = json_weather["data"]["current_condition"][0]["temp_C"]
         except:
             Logger.log(logging.ERROR, "Full response from worldweatheronline: " + str(json_weather))
-
+            
         Logger.log(logging.INFO, "chance_of_rain: " + str(chance_of_rain))  
 
         self._chanceOfRain = int(chance_of_rain)
         self._currentTemp = ct
-
+    
     def time_check(self, latitude, longitude):
         Logger.log(logging.INFO, "Passing device geo-location to Google Maps TimeZone API to find local time offset")
         epochtime = time.time()
@@ -286,6 +316,7 @@ class DoorDevice(Device):
         print("Full response from Google Maps Timezone API: ", json_timezone)
 
         volume = 0.5
+        status = "OK"
         
         if json_timezone["status"] == "OK":
             # Calculate the local time at the provided geo-coordinates
@@ -308,10 +339,11 @@ class DoorDevice(Device):
             print("string datetime: ", str(local_time_now))
             local_time_str=local_time_now.strftime('%I:%M%p')
         else:
-            local_time_str = "00:00:00"    
+            local_time_str = "00:00:00"
+            status = "error"
             print("No results from Google Maps")
 
-        return {'local_time_str': local_time_str, 'volume': volume}
+        return {"local_time_str": local_time_str, "volume": volume, "status": status}
 
     '''
         calls API gateway endpoint with access key to extract json dump from dynamodb table which
@@ -320,28 +352,21 @@ class DoorDevice(Device):
         - thread safe
     '''    
     def checkPlaylist(self):
-        locked = False
-        #print("checking for latest disco playlist")
-
+        result = True
         try:
             url = "https://yoq0oxlvog.execute-api.ap-southeast-2.amazonaws.com/base?macaddr=%s" % (self._macAddress)
             request = urllib.request.Request(url, headers = {"x-api-key": "ULi868dax46EqcuBr1Y6X7llnNOyZS8i48yKf1E9"})
             with urllib.request.urlopen(request) as response:
                 data = response.readall().decode("utf-8")
-                locked = True
-                self._playlistDataMutex.acquire()
-                self._playlistData = json.loads(data)
+                playlist = json.loads(data)
+                self.setPlaylist(playlist)
                 Logger.log(logging.INFO, "got playlist")
         except Exception as e:
             Logger.log(logging.INFO, "playlist fetch error: " + str(e))
-            if not locked:
-                locked = True
-                self._playlistDataMutex.acquire()
-                
             self._playlistData = {"Owner": "resident", "Count": 1, "Items": [{"song_name": "dont leave me this way", "artist": "unknown"}]}
-        finally:
-            if locked:
-                self._playlistDataMutex.release()
+            Logger.log(logging.ERROR, "playlist check failed")
+            result = False
+        return result
 
 class DiscoBall():
     def __init__(self, pin):
