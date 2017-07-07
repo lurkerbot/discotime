@@ -172,6 +172,7 @@ class DoorDevice(Device):
 
         key_id = "-"
         key_secret = "-"
+
         self._s3 = boto3.resource('s3', region_name='ap-southeast-2', aws_access_key_id = key_id, aws_secret_access_key = key_secret)
         self._S3DoorStatusBucket = self._s3.Bucket('daas-door-status')
 
@@ -420,7 +421,15 @@ class DiscoDevice(Device):
         discoendtime=discostarttime+duration
         print("discoendtime: ",discoendtime)
 
-        pygame.mixer.music.play(start=float(mark_in))
+        # playback through pygame sometimes fails - so give it up to three attempts
+        
+        playAttempts = 0
+        while playAttempts < 3:
+            try:
+                pygame.mixer.music.play(start=float(mark_in))
+                playAttempts = 3
+            except:
+                playAttempts = playAttempts + 1
 
         # Download the Welcome Home message while song plays
         messageURL = self.createPollyMessageURL(voiceMessage, registeredOwner)
@@ -433,11 +442,15 @@ class DiscoDevice(Device):
 
         time.sleep(5)
 
-        try:
-            pygame.mixer.music.fadeout(3000)
-            time.sleep(3)
-        except:
-            print("mixer error")
+        fadeoutAttempts = 0
+        while fadeoutAttempts < 3:
+            try:
+                pygame.mixer.music.fadeout(3000)
+                fadeoutAttempts = 3
+                time.sleep(3)
+            except:
+                print("mixer error")
+                fadeoutAttempts = fadeoutAttempts + 1
 
         try:
             discoball1.stop()
