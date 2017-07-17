@@ -62,6 +62,7 @@ class shadowManager:
 
     def basicShadowPublish(self, srcShadowName, srcShadowAction, srcPayload):
         currentShadowAction = _shadowAction(srcShadowName, srcShadowAction)
+        print(currentShadowAction.getTopicGeneral())
         self._mqttCoreHandler.publish(currentShadowAction.getTopicGeneral(), srcPayload, 0, False)
 
     def basicShadowSubscribe(self, srcShadowName, srcShadowAction, srcCallback):
