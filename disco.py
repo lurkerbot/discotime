@@ -18,8 +18,8 @@ import pprint
 import socket
 
 import pygame
-import RPi.GPIO as GPIO
-GPIO.setmode(GPIO.BCM)
+#import RPi.GPIO as GPIO
+#GPIO.setmode(GPIO.BCM)
 
 DB1PIN=26
 DB2PIN=13
@@ -36,7 +36,7 @@ import time
 
 # configure logging
 Logger = logging.getLogger("AWSIoTPythonSDK.core")
-Logger.setLevel(logging.ERROR)
+Logger.setLevel(logging.INFO)
 streamHandler = logging.StreamHandler()
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 streamHandler.setFormatter(formatter)
@@ -45,7 +45,7 @@ Logger.addHandler(streamHandler)
 class Device(object):
     def __init__(self):
         self._shadowName = "<<UNNAMEDDEVICE>>"
-        self._macAddress = open('/sys/class/net/eth0/address').read()
+        self._macAddress = "-" #open('/sys/class/net/eth0/address').read()
         self._doorOpenStartTime = 0
         try:
             request = requests.get("http://freegeoip.net/json")
@@ -81,7 +81,6 @@ class Device(object):
         assert(False) # must implement
 
     def shadowDeltaChangeHandler(self, payload, responseStatus, token):
-        #print("our shadow was updated: " + payload)
         self.applyShadowJSON(payload)
 
     def shadowGetCompleteHandler(self, payload, responseStatus, token):
@@ -102,14 +101,14 @@ class Device(object):
 
         #host = "192.168.3.214"
         #host = "127.0.0.1"
-        host = "HappyHomeGroup_Core"
-        rootCAPath = "private/core/dev.crt"
+        #host = "HappyHomeGroup_Core"
+        #rootCAPath = "private/core/dev.crt"
         
         print(self._shadowName)
     
         self._shadowClient = AWSIoTMQTTShadowClient(self._shadowName)
-        self._shadowClient.configureEndpoint(host, 8883)
-        self._shadowClient.configureCredentials(rootCAPath, self._privateKeyPath, self._certificatePath)
+        self._shadowClient.configureEndpoint(self._host, 8883)
+        self._shadowClient.configureCredentials(self._rootCAPath, self._privateKeyPath, self._certificatePath)
 
         # AWSIoTMQTTShadowClient configuration
         self._shadowClient.configureAutoReconnectBackoffTime(5, 250, 20)
@@ -152,6 +151,28 @@ class LocalPollingThread(threading.Thread):
         except KeyboardInterrupt:
             Logger.log(logging.INFO, "leaving thread")
 
+class VOXDevice(Device):
+    def __init__(self):
+        super(VOXDevice, self).__init__()
+        self._shadowName = "DAAS_VOX"
+        self._stateData = {}
+
+    def connectDeviceShadow(self):
+        self._privateKeyPath = "private/DAAS_VOX_23aa8f6c21-private.pem.key"
+        self._certificatePath = "private/DAAS_VOX_23aa8f6c21-certificate.pem.crt"
+        self._host = "a30rsz8andmfjk.iot.us-west-2.amazonaws.com"
+        self._rootCAPath = "private/root-CA.crt"
+        super(VOXDevice, self).connectDeviceShadow()
+        Logger.log(logging.INFO, "vox alive")
+        self.getShadowState()
+
+    def applyShadowJSON(self, shadowJSON):
+        try:
+            unpackedJSON = json.loads(shadowJSON)["state"]
+            pprint.pprint(unpackedJSON)
+        except:
+            Logger.log(logging.ERROR, "vox shadow get error")        
+
 # Class DoorDevice extends class device by adding functions specific to the DAAS connected door
 class DoorDevice(Device):
     def __init__(self, pin):
@@ -167,7 +188,7 @@ class DoorDevice(Device):
         self._volume = time_and_vol["volume"]
         self.checkWeather()
         self.checkPlaylist()
-        GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        #GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
         self._localPollingThread = LocalPollingThread(self)
         self._localPollingThread.start()
 
@@ -180,6 +201,9 @@ class DoorDevice(Device):
     def connectDeviceShadow(self):
         self._privateKeyPath = "private/door/806bf01189-private.pem.key"
         self._certificatePath = "private/door/806bf01189-certificate.pem.crt"
+        self._host = "HappyHomeGroup_Core"
+        self._rootCAPath = "private/core/dev.crt"
+
         super(DoorDevice, self).connectDeviceShadow()
 
         if self.checkPlaylist():
@@ -518,6 +542,10 @@ class DiscoDevice(Device):
 #
 ## now kick things off
 #
+
+voxControlDevice = VOXDevice()
+voxControlDevice.connectDeviceShadow()
+
 #door = DoorDevice(5)
 #door.checkWeather()
 #door.connectDeviceShadow()
@@ -526,9 +554,9 @@ class DiscoDevice(Device):
 #disco.playDisco("songy song song", "oh hi!", "smithy", 0, 10, 10)
 #disco.connectDeviceShadow()
 
-#try:
-#    while True:
-        #Logger.log(logging.INFO, "---")
+try:
+    while True:
+        Logger.log(logging.INFO, "---")
         #Logger.log(logging.INFO, "open door")
         #door.open()
         #Logger.log(logging.INFO, "time: " + str(time.time()))
@@ -539,11 +567,12 @@ class DiscoDevice(Device):
         #pprint.pprint(json.loads(door.toShadowJSON()))
         #Logger.log(logging.INFO, "close door")
         #door.close()
-        #time.sleep(5)
+        time.sleep(5)
 
-#except KeyboardInterrupt:
-#        print('Interrupted')
-#        try:
-#            sys.exit(0)
-#        except SystemExit:
-#            os._exit(0)
+except KeyboardInterrupt:
+        print('Interrupted')
+        try:
+            sys.exit(0)
+        except SystemExit:
+            os._exit(0)
+
