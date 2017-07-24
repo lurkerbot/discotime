@@ -36,7 +36,7 @@ import time
 
 # configure logging
 Logger = logging.getLogger("AWSIoTPythonSDK.core")
-Logger.setLevel(logging.INFO)
+Logger.setLevel(logging.ERROR)
 streamHandler = logging.StreamHandler()
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 streamHandler.setFormatter(formatter)
@@ -163,7 +163,8 @@ class VOXDevice(Device):
         self._host = "a30rsz8andmfjk.iot.us-west-2.amazonaws.com"
         self._rootCAPath = "private/root-CA.crt"
         super(VOXDevice, self).connectDeviceShadow()
-        Logger.log(logging.INFO, "vox alive")
+        Logger.log(logging.ERROR, "vox alive")
+        Logger.log(logging.ERROR, " - get - ")
         self.getShadowState()
 
     def applyShadowJSON(self, shadowJSON):
