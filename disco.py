@@ -36,7 +36,7 @@ import time
 
 # configure logging
 Logger = logging.getLogger("AWSIoTPythonSDK.core")
-Logger.setLevel(logging.ERROR)
+Logger.setLevel(logging.INFO)
 streamHandler = logging.StreamHandler()
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 streamHandler.setFormatter(formatter)
@@ -189,7 +189,7 @@ class DoorDevice(Device):
         self._volume = time_and_vol["volume"]
         self.checkWeather()
         self.checkPlaylist()
-        #GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
         self._localPollingThread = LocalPollingThread(self)
         self._localPollingThread.start()
 
@@ -555,9 +555,9 @@ class DiscoDevice(Device):
 #disco.playDisco("songy song song", "oh hi!", "smithy", 0, 10, 10)
 #disco.connectDeviceShadow()
 
-try:
-    while True:
-        Logger.log(logging.INFO, "---")
+#try:
+#    while True:
+#        Logger.log(logging.INFO, "---")
         #Logger.log(logging.INFO, "open door")
         #door.open()
         #Logger.log(logging.INFO, "time: " + str(time.time()))
@@ -568,12 +568,12 @@ try:
         #pprint.pprint(json.loads(door.toShadowJSON()))
         #Logger.log(logging.INFO, "close door")
         #door.close()
-        time.sleep(5)
+#        time.sleep(5)
 
-except KeyboardInterrupt:
-        print('Interrupted')
-        try:
-            sys.exit(0)
-        except SystemExit:
-            os._exit(0)
+#except KeyboardInterrupt:
+#        print('Interrupted')
+#        try:
+#            sys.exit(0)
+#        except SystemExit:
+#            os._exit(0)
 
