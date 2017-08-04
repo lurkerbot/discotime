@@ -71,6 +71,9 @@ door.connectDeviceShadow()
 disco = DiscoDevice()
 disco.connectDeviceShadow()
 
+voxControlDevice = VOXDevice()
+voxControlDevice.connectDeviceShadow()
+
 print("door device connected, listening...")
 
 try:

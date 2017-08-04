@@ -544,13 +544,13 @@ class DiscoDevice(Device):
 ## now kick things off
 #
 
-voxControlDevice = VOXDevice()
-voxControlDevice.connectDeviceShadow()
+#voxControlDevice = VOXDevice()
+#voxControlDevice.connectDeviceShadow()
 
 #door = DoorDevice(5)
 #door.checkWeather()
 #door.connectDeviceShadow()
-#
+
 #disco = DiscoDevice()
 #disco.playDisco("songy song song", "oh hi!", "smithy", 0, 10, 10)
 #disco.connectDeviceShadow()
