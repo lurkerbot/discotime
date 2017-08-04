@@ -18,8 +18,8 @@ import pprint
 import socket
 
 import pygame
-#import RPi.GPIO as GPIO
-#GPIO.setmode(GPIO.BCM)
+import RPi.GPIO as GPIO
+GPIO.setmode(GPIO.BCM)
 
 DB1PIN=26
 DB2PIN=13
@@ -424,6 +424,8 @@ class DiscoDevice(Device):
     def connectDeviceShadow(self):
         self._privateKeyPath = "private/player/14a52be2ca-private.pem.key"
         self._certificatePath = "private/player/14a52be2ca-certificate.pem.crt"
+        self._host = "HappyHomeGroup_Core"
+        self._rootCAPath = "private/core/dev.crt"
         super(DiscoDevice, self).connectDeviceShadow()
 
     def shadowDeltaChangeHandler(self, payload, responseStatus, token):
