@@ -8,7 +8,7 @@ import logging
 import getopt
 sys.path.append("aws-iot-device-sdk-python")
 from AWSIoTPythonSDK.MQTTLib import AWSIoTMQTTShadowClient
-from disco import DoorDevice, DiscoDevice
+from disco import DoorDevice, DiscoDevice, VOXDevice
 
 #DB1PIN=6
 #DB2PIN=13
